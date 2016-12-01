@@ -84,6 +84,11 @@ pub struct Condition {
     pub right: Operand,
 }
 
+enum Param{
+    Condition(Condition),
+    Equation(Equation)
+}
+
 #[derive(Debug)]
 #[derive(PartialEq)]
 pub struct Filter {
@@ -201,6 +206,37 @@ named!(equality<Equality>,
     )
 );
 
+named!(parens <Condition>,
+    delimited!(tag!("("), condition, tag!(")"))
+);
+
+named!(connector <Connector>,
+   alt!(tag!("&") => {|_| Connector::AND} |
+        tag!("|") => {|_| Connector::OR}
+   )
+);
+
+named!(param <Param>,
+    alt!(condition => {|c| Param::Condition(c)}| 
+         equation => {|e| Param::Equation(e)}
+    )
+);
+
+named!(equation <Equation>, 
+    map!(tuple!(column,
+        tag!("="),
+        operand 
+    ),
+    |(col,_,op):(&str,_,Operand)|{
+        Equation{
+            left: Operand::Column(col.to_string()),
+            right: op
+        }
+    }
+    )
+);
+
+
 named!(condition <Condition>,
     map!(tuple!(
         column,
@@ -276,6 +312,14 @@ fn test_cond(){
         ));
     
     assert_eq!(condition(&b"name=st.John"[..]), IResult::Done(&b""[..], 
+        Condition{
+            left: Operand::Column("name".to_string()),
+            equality: Equality::ST,
+            right: Operand::Column("John".to_string())
+          }
+        ));
+
+    assert_eq!(parens(&b"(name=st.John)"[..]), IResult::Done(&b""[..], 
         Condition{
             left: Operand::Column("name".to_string()),
             equality: Equality::ST,
