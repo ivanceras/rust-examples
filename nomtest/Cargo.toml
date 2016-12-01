@@ -1,0 +1,7 @@
+[package]
+name = "nomtest"
+version = "0.1.0"
+authors = ["lee"]
+
+[dependencies]
+nom = "2"
