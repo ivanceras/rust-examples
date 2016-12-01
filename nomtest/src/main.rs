@@ -220,7 +220,7 @@ named!(condition <Condition>,
 );
 
 
-named!(unsigned_float <f32>, map_res!(
+named!(unsigned_float <f64>, map_res!(
   map_res!(
     recognize!(
       alt_complete!(
@@ -234,13 +234,13 @@ named!(unsigned_float <f32>, map_res!(
   FromStr::from_str
 ));
 
-named!(float <f32>, map!(
+named!(float <f64>, map!(
   pair!(
     opt!(alt!(tag!("+") | tag!("-"))),
     unsigned_float
   ),
-  |(sign, value): (Option<&[u8]>, f32)| {
-    sign.and_then(|s| if s[0] == ('-' as u8) { Some(-1f32) } else { None }).unwrap_or(1f32) * value
+  |(sign, value): (Option<&[u8]>, f64)| {
+    sign.and_then(|s| if s[0] == ('-' as u8) { Some(-1f64) } else { None }).unwrap_or(1f64) * value
   }
 ));
 
@@ -269,9 +269,9 @@ fn test_cond(){
         ));
     assert_eq!(condition(&b"price=lt.-0.3"[..]), IResult::Done(&b""[..], 
         Condition{
-            left: Operand::Column("product".to_string()),
-            equality: Equality::EQ,
-            right: Operand::Number(0.3)
+            left: Operand::Column("price".to_string()),
+            equality: Equality::LT,
+            right: Operand::Number(-0.3)
           }
         ));
     
@@ -325,7 +325,7 @@ fn unsigned_float_test() {
   assert_eq!(unsigned_float(&b"123.0"[..]),   IResult::Done(&b""[..], 123.0));
   assert_eq!(unsigned_float(&b"123."[..]),    IResult::Done(&b""[..], 123.0));
   assert_eq!(unsigned_float(&b".123"[..]),    IResult::Done(&b""[..], 0.123));
-  assert_eq!(unsigned_float(&b"123456"[..]), IResult::Done(&b""[..], 123456f32));
+  assert_eq!(unsigned_float(&b"123456"[..]), IResult::Done(&b""[..], 123456f64));
 }
 
 #[test]
