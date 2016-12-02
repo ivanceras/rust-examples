@@ -1,7 +1,7 @@
 #[macro_use]
 extern crate nom;
 
-use nom::{IResult,digit,alphanumeric,anychar};
+use nom::{IResult,digit,alphanumeric,anychar,is_alphanumeric};
 
 use std::str;
 use std::str::FromStr;
@@ -191,11 +191,25 @@ fn main() {
     println!("Hello, world!");
 }
 
+named!(value<&str>, 
+  map_res!(complete!(recognize!(many1!(is_not_s!(")"))))
+    ,str::from_utf8
+  )
+);
+
+named!(column<&str>, 
+  map_res!(recognize!(many1!(one_of!("abcdefghijklmnopqrstuvwxyz0123456789_")))
+    ,str::from_utf8
+  )
+);
+
+/*
 named!(column <&str>, map_res!(
         complete!(alphanumeric),
         str::from_utf8
     )
 );
+*/
 
 named!(boolean <bool>,
     alt!(tag!("true") => {|_| true} |
@@ -207,7 +221,8 @@ named!(operand <Operand>,
    alt_complete!(
         float => {|f| Operand::Number(f as f64)} |
         boolean => {|b| Operand::Boolean(b) } |
-        column => {|c:&str| Operand::Column(c.to_string())}
+        //column => {|c:&str| Operand::Column(c.to_string())} | //NOTE: assume the right value to be value, and the left to be always column
+        value => {|v:&str| Operand::Value(v.to_string())}
    ) 
 );
 
@@ -241,7 +256,7 @@ named!(param <Param>,
     )
 );
 
-fn fold_filters(initial: Condition, remainder: Vec<(Connector, Condition)>) -> Filter{
+fn fold_conditions(initial: Condition, remainder: Vec<(Connector, Condition)>) -> Filter{
     let mut sub_filters = vec![];
     for (conn, cond) in remainder{
         let sub_filter = Filter{
@@ -269,7 +284,7 @@ named!(filters <Filter>,
                         (conn, cond)
                    )
                 )
-             >> (fold_filters(initial, remainder))
+             >> (fold_conditions(initial, remainder))
             )
             |
             delimited!(tag!("("), filters, tag!(")"))
@@ -369,6 +384,20 @@ named!(float <f64>, map!(
     sign.and_then(|s| if s[0] == ('-' as u8) { Some(-1f64) } else { None }).unwrap_or(1f64) * value
   }
 ));
+
+
+#[test]
+fn test_identifier(){
+    assert_eq!(column("ahello".as_bytes()), IResult::Done(&b""[..],"ahello"));
+    assert_eq!(column("hello_".as_bytes()), IResult::Done(&b""[..],"hello_"));
+    assert_eq!(column("hello1".as_bytes()), IResult::Done(&b""[..],"hello1"));
+}
+
+#[test]
+fn test_value(){
+    assert_eq!(value("hello world!".as_bytes()), IResult::Done(&b""[..],"hello world!"));
+    assert_eq!(value("技術通報".as_bytes()), IResult::Done(&b""[..],"技術通報"));
+}
 
 #[test]
 fn test_param(){
@@ -622,7 +651,15 @@ fn test_cond(){
         Condition{
             left: Operand::Column("name".to_string()),
             equality: Equality::ST,
-            right: Operand::Column("John".to_string())
+            right: Operand::Value("John".to_string())
+          }
+        ));
+
+    assert_eq!(condition(&b"name=st.John Cena"[..]), IResult::Done(&b""[..], 
+        Condition{
+            left: Operand::Column("name".to_string()),
+            equality: Equality::ST,
+            right: Operand::Value("John Cena".to_string())
           }
         ));
 
@@ -630,7 +667,21 @@ fn test_cond(){
         Condition{
             left: Operand::Column("name".to_string()),
             equality: Equality::ST,
-            right: Operand::Column("John".to_string())
+            right: Operand::Value("John".to_string())
+          }
+        ));
+    assert_eq!(condition("name=st.技術通".as_bytes()), IResult::Done(&b""[..], 
+        Condition{
+            left: Operand::Column("name".to_string()),
+            equality: Equality::ST,
+            right: Operand::Value("技術通".to_string())
+          }
+        ));
+    assert_eq!(condition("name=ilike.*° ͜ʖ ͡°*".as_bytes()), IResult::Done(&b""[..], 
+        Condition{
+            left: Operand::Column("name".to_string()),
+            equality: Equality::ILIKE,
+            right: Operand::Value("*° ͜ʖ ͡°*".to_string())
           }
         ));
 }
@@ -648,7 +699,7 @@ fn test_equality(){
 #[test]
 fn test_operand() {
     assert_eq!(operand(&b"product"[..]), 
-        IResult::Done(&b""[..],Operand::Column("product".to_string()))); 
+        IResult::Done(&b""[..],Operand::Value("product".to_string()))); 
 
     assert_eq!(operand(&b"1234"[..]), 
         IResult::Done(&b""[..],Operand::Number(1234f64))); 
@@ -659,8 +710,15 @@ fn test_operand() {
     assert_eq!(operand(&b"false"[..]), 
         IResult::Done(&b""[..],Operand::Boolean(false))); 
 
-    assert_eq!(operand(&b"trufalse"[..]), 
-        IResult::Done(&b""[..],Operand::Column("trufalse".to_string()))); 
+    // half match?
+    //assert_eq!(operand(&b"true false"[..]), 
+    //    IResult::Done(&b""[..],Operand::Column("true false".to_string()))); 
+
+    assert_eq!(operand(&b"Hello world!"[..]), 
+        IResult::Done(&b""[..],Operand::Value("Hello world!".to_string()))); 
+
+    assert_eq!(operand(&b"hello world!"[..]), 
+        IResult::Done(&b""[..],Operand::Value("hello world!".to_string()))); 
 }
 
 #[test]
