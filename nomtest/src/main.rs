@@ -8,6 +8,7 @@ use std::str::FromStr;
 
 #[derive(Debug)]
 #[derive(PartialEq)]
+#[derive(Clone)]
 pub struct Equation {
     pub left: Operand,
     pub right: Operand,
@@ -15,6 +16,7 @@ pub struct Equation {
 
 #[derive(Debug)]
 #[derive(PartialEq)]
+#[derive(Clone)]
 pub struct Function {
     pub function: String,
     pub params: Vec<Operand>,
@@ -22,6 +24,7 @@ pub struct Function {
 
 #[derive(Debug)]
 #[derive(PartialEq)]
+#[derive(Clone)]
 pub enum Operand {
     Column(String),
     Function(Function),
@@ -32,12 +35,14 @@ pub enum Operand {
 
 #[derive(Debug)]
 #[derive(PartialEq)]
+#[derive(Clone)]
 pub enum Connector {
     AND,
     OR,
 }
 #[derive(Debug)]
 #[derive(PartialEq)]
+#[derive(Clone)]
 pub enum Direction {
     ASC,
     DESC,
@@ -45,6 +50,7 @@ pub enum Direction {
 
 #[derive(Debug)]
 #[derive(PartialEq)]
+#[derive(Clone)]
 pub enum NullsWhere {
     FIRST,
     LAST,
@@ -52,6 +58,7 @@ pub enum NullsWhere {
 
 #[derive(Debug)]
 #[derive(PartialEq)]
+#[derive(Clone)]
 pub struct Order {
     pub operand: Operand,
     pub direction: Option<Direction>,
@@ -60,6 +67,7 @@ pub struct Order {
 
 #[derive(Debug)]
 #[derive(PartialEq)]
+#[derive(Clone)]
 pub enum Equality {
     EQ, // = ,  eq
     NEQ, // != , neq
@@ -78,12 +86,17 @@ pub enum Equality {
 
 #[derive(Debug)]
 #[derive(PartialEq)]
+#[derive(Clone)]
 pub struct Condition {
     pub left: Operand,
     pub equality: Equality,
     pub right: Operand,
 }
 
+
+#[derive(Debug)]
+#[derive(PartialEq)]
+#[derive(Clone)]
 enum Param{
     Condition(Condition),
     Equation(Equation)
@@ -91,9 +104,11 @@ enum Param{
 
 #[derive(Debug)]
 #[derive(PartialEq)]
+#[derive(Clone)]
 pub struct Filter {
-    pub connector: Option<Connector>,
     pub condition: Condition,
+    /// the filter's condition will use this connector to connect to the rest of the filters (sub_filters)
+    pub connector: Option<Connector>,
     pub sub_filters: Vec<Filter>,
 }
 
@@ -102,6 +117,7 @@ pub struct Filter {
 #[derive(Debug)]
 #[derive(PartialEq)]
 #[derive(Default)]
+#[derive(Clone)]
 pub struct Query {
     pub from: Vec<Operand>,
     pub join: Vec<Join>,
@@ -116,6 +132,7 @@ pub struct Query {
 #[derive(Debug)]
 #[derive(PartialEq)]
 #[derive(Default)]
+#[derive(Clone)]
 pub struct Page {
     pub page: i64,
     pub page_size: i64,
@@ -124,6 +141,7 @@ pub struct Page {
 #[derive(Debug)]
 #[derive(PartialEq)]
 #[derive(Default)]
+#[derive(Clone)]
 pub struct Limit {
     pub limit: i64,
     pub offset: Option<i64>,
@@ -131,6 +149,7 @@ pub struct Limit {
 
 #[derive(Debug)]
 #[derive(PartialEq)]
+#[derive(Clone)]
 pub enum Range {
     Page(Page),
     Limit(Limit),
@@ -139,6 +158,7 @@ pub enum Range {
 
 #[derive(Debug)]
 #[derive(PartialEq)]
+#[derive(Clone)]
 pub enum JoinType {
     CROSS,
     INNER,
@@ -147,6 +167,7 @@ pub enum JoinType {
 }
 #[derive(Debug)]
 #[derive(PartialEq)]
+#[derive(Clone)]
 pub enum Modifier {
     LEFT,
     RIGHT,
@@ -155,6 +176,7 @@ pub enum Modifier {
 
 #[derive(Debug)]
 #[derive(PartialEq)]
+#[derive(Clone)]
 pub struct Join {
     pub modifier: Option<Modifier>,
     pub join_type: Option<JoinType>,
@@ -206,9 +228,6 @@ named!(equality<Equality>,
     )
 );
 
-named!(parens <Condition>,
-    delimited!(tag!("("), condition, tag!(")"))
-);
 
 named!(connector <Connector>,
    alt!(tag!("&") => {|_| Connector::AND} |
@@ -222,12 +241,79 @@ named!(param <Param>,
     )
 );
 
+fn fold_filters(initial: Condition, remainder: Vec<(Connector, Condition)>) -> Filter{
+    let mut sub_filters = vec![];
+    for (conn, cond) in remainder{
+        let sub_filter = Filter{
+                connector: Some(conn),
+                condition: cond,
+                sub_filters: vec![]
+            };
+        sub_filters.push(sub_filter);
+    }
+    Filter{
+        connector: None,
+        condition: initial,
+        sub_filters: sub_filters
+    }
+}
+
+
+named!(filters <Filter>,
+        alt_complete!(
+            do_parse!(
+                initial: condition >>
+                remainder: many0!(
+                   do_parse!(conn: connector >>
+                       cond: condition >> 
+                        (conn, cond)
+                   )
+                )
+             >> (fold_filters(initial, remainder))
+            )
+            |
+            delimited!(tag!("("), filters, tag!(")"))
+        )
+);
+
+
+named!(filter <Filter>,
+    alt_complete!(
+        map!(tuple!(condition,
+               connector,
+               filter
+              ),
+            |(cond, conn, sub_filtr):(Condition, Connector, Filter)|{
+                Filter{
+                    connector: Some(conn),
+                    condition: cond,
+                    sub_filters: vec![sub_filtr]
+                }
+            }
+        )
+        |
+        delimited!(tag!("("), filter, tag!(")"))
+        |
+        condition => {|c| 
+                    Filter{
+                        connector: None,
+                        condition: c,
+                        sub_filters: vec![]
+                    } 
+                } 
+    )
+);
+
+named!(params < Vec<Param> >,
+    separated_list!(tag!("&"), param)
+);
+
 named!(equation <Equation>, 
-    map!(tuple!(column,
+    map!(separated_pair!(column,
         tag!("="),
         operand 
     ),
-    |(col,_,op):(&str,_,Operand)|{
+    |(col,op):(&str,Operand)|{
         Equation{
             left: Operand::Column(col.to_string()),
             right: op
@@ -238,20 +324,24 @@ named!(equation <Equation>,
 
 
 named!(condition <Condition>,
-    map!(tuple!(
-        column,
-        tag!("="),
-        equality,
-        tag!("."),
-        operand
-    ),
-    |(col,_,eq,_,op):(&str,_,Equality,_,Operand)|{
-        Condition{
-            left: Operand::Column(col.to_string()),
-            equality: eq,
-            right: op
+    alt_complete!(
+        map!(tuple!(
+            column,
+            tag!("="),
+            equality,
+            tag!("."),
+            operand
+        ),
+        |(col,_,eq,_,op):(&str,_,Equality,_,Operand)|{
+            Condition{
+                left: Operand::Column(col.to_string()),
+                equality: eq,
+                right: op
+            }
         }
-    }
+        )
+        |
+        delimited!(tag!("("), condition, tag!(")"))
     )
 );
 
@@ -279,6 +369,223 @@ named!(float <f64>, map!(
     sign.and_then(|s| if s[0] == ('-' as u8) { Some(-1f64) } else { None }).unwrap_or(1f64) * value
   }
 ));
+
+#[test]
+fn test_param(){
+    assert_eq!(param(&b"product=eq.134"[..]), IResult::Done(&b""[..], 
+        Param::Condition(Condition{
+            left: Operand::Column("product".to_string()),
+            equality: Equality::EQ,
+            right: Operand::Number(134f64)
+          }
+        )));
+
+    assert_eq!(param(&b"product=134"[..]), IResult::Done(&b""[..], 
+        Param::Equation(Equation{
+            left: Operand::Column("product".to_string()),
+            right: Operand::Number(134f64)
+          }
+        )));
+}
+
+#[test]
+fn test_params(){
+    assert_eq!(params(&b"product=eq.134"[..]), IResult::Done(&b""[..], 
+        vec![Param::Condition(Condition{
+            left: Operand::Column("product".to_string()),
+            equality: Equality::EQ,
+            right: Operand::Number(134f64)
+          })]
+        ));
+
+    assert_eq!(params(&b"product=eq.134&page=2"[..]), IResult::Done(&b""[..], 
+        vec![Param::Condition(Condition{
+            left: Operand::Column("product".to_string()),
+            equality: Equality::EQ,
+            right: Operand::Number(134f64)
+          }),
+            Param::Equation(Equation{
+                left: Operand::Column("page".to_string()),
+                right: Operand::Number(2f64)
+            })
+          ]
+        ));
+}
+
+// (filter)&condition wont match
+#[test]
+fn test_filter_issue1(){
+    assert_eq!(filters(&b"age=lt.20&product=eq.134&price=lt.100.0"[..]), IResult::Done(&b""[..], 
+        Filter{
+            connector: None,
+            condition: Condition{
+                    left: Operand::Column("age".to_string()),
+                    equality: Equality::LT,
+                    right: Operand::Number(20f64)
+                },
+            sub_filters:vec![
+                Filter{
+                    condition:Condition{
+                        left: Operand::Column("product".to_string()),
+                        equality: Equality::EQ,
+                        right: Operand::Number(134f64)
+                    },
+                    connector: Some(Connector::AND),
+                    sub_filters: vec![
+                    ]
+                },
+                Filter{
+                    connector: Some(Connector::AND),
+                    condition: Condition{
+                        left: Operand::Column("price".to_string()),
+                        equality: Equality::LT,
+                        right: Operand::Number(100.0)
+                    },
+                    sub_filters: vec![]
+                }
+            ]
+        }
+        ));
+}
+// (filter)&(filter) wont match
+//#[test]
+fn test_filter_issue2(){
+
+}
+
+#[test]
+fn test_filters(){
+    assert_eq!(filter(&b"product=eq.134"[..]), IResult::Done(&b""[..], 
+        Filter{
+            connector: None,
+            condition:Condition{
+                left: Operand::Column("product".to_string()),
+                equality: Equality::EQ,
+                right: Operand::Number(134f64)
+            },
+            sub_filters: vec![]
+        }
+        ));
+
+    assert_eq!(filter(&b"product=eq.134&price=lt.100.0"[..]), IResult::Done(&b""[..], 
+        Filter{
+            condition:Condition{
+                left: Operand::Column("product".to_string()),
+                equality: Equality::EQ,
+                right: Operand::Number(134f64)
+            },
+            connector: Some(Connector::AND),
+            sub_filters: vec![
+                Filter{
+                    connector: None,
+                    condition: Condition{
+                        left: Operand::Column("price".to_string()),
+                        equality: Equality::LT,
+                        right: Operand::Number(100.0)
+                    },
+                    sub_filters: vec![]
+                }
+            ]
+        }
+        ));
+
+    assert_eq!(filter(&b"product=eq.134|price=lt.100.0"[..]), IResult::Done(&b""[..], 
+        Filter{
+            condition:Condition{
+                left: Operand::Column("product".to_string()),
+                equality: Equality::EQ,
+                right: Operand::Number(134f64)
+            },
+            connector: Some(Connector::OR),
+            sub_filters: vec![
+                Filter{
+                    connector: None,
+                    condition: Condition{
+                        left: Operand::Column("price".to_string()),
+                        equality: Equality::LT,
+                        right: Operand::Number(100.0)
+                    },
+                    sub_filters: vec![]
+                }
+            ]
+        }
+        ));
+
+    assert_eq!(filter(&b"(product=eq.134|price=lt.100.0)"[..]), IResult::Done(&b""[..], 
+        Filter{
+            condition:Condition{
+                left: Operand::Column("product".to_string()),
+                equality: Equality::EQ,
+                right: Operand::Number(134f64)
+            },
+            connector: Some(Connector::OR),
+            sub_filters: vec![
+                Filter{
+                    connector: None,
+                    condition: Condition{
+                        left: Operand::Column("price".to_string()),
+                        equality: Equality::LT,
+                        right: Operand::Number(100.0)
+                    },
+                    sub_filters: vec![]
+                }
+            ]
+        }
+        ));
+    assert_eq!(filter(&b"(product=eq.134)|(price=lt.100.0)"[..]), IResult::Done(&b""[..], 
+        Filter{
+            condition:Condition{
+                left: Operand::Column("product".to_string()),
+                equality: Equality::EQ,
+                right: Operand::Number(134f64)
+            },
+            connector: Some(Connector::OR),
+            sub_filters: vec![
+                Filter{
+                    condition: Condition{
+                        left: Operand::Column("price".to_string()),
+                        equality: Equality::LT,
+                        right: Operand::Number(100.0)
+                    },
+                    connector: None,
+                    sub_filters: vec![]
+                }
+            ]
+        }
+        ));
+
+    assert_eq!(filter(&b"age=lt.20&(product=eq.134|price=lt.100.0)"[..]), IResult::Done(&b""[..], 
+        Filter{
+            condition: Condition{
+                    left: Operand::Column("age".to_string()),
+                    equality: Equality::LT,
+                    right: Operand::Number(20f64)
+                },
+            connector: Some(Connector::AND),
+            sub_filters:vec![
+                Filter{
+                    condition:Condition{
+                        left: Operand::Column("product".to_string()),
+                        equality: Equality::EQ,
+                        right: Operand::Number(134f64)
+                    },
+                    connector: Some(Connector::OR),
+                    sub_filters: vec![
+                        Filter{
+                            connector: None,
+                            condition: Condition{
+                                left: Operand::Column("price".to_string()),
+                                equality: Equality::LT,
+                                right: Operand::Number(100.0)
+                            },
+                            sub_filters: vec![]
+                        }
+                    ]
+                }
+            ]
+        }
+        ));
+}
 
 #[test]
 fn test_boolean(){
@@ -319,7 +626,7 @@ fn test_cond(){
           }
         ));
 
-    assert_eq!(parens(&b"(name=st.John)"[..]), IResult::Done(&b""[..], 
+    assert_eq!(condition(&b"(name=st.John)"[..]), IResult::Done(&b""[..], 
         Condition{
             left: Operand::Column("name".to_string()),
             equality: Equality::ST,
