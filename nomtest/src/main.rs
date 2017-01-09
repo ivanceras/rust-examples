@@ -288,7 +288,7 @@ named!(filter <Filter>,
 );
 
 named!(filter_expr <Filter>,
-    delimited!(tag!("("), filter, tag!(")"))
+    alt_complete!(filter | delimited!(tag!("("), filter_expr, tag!(")")))
 );
     
 
@@ -538,7 +538,7 @@ fn test_filters(){
     
 }
 
-//#[test]
+#[test]
 fn test_paren_filter_exprs(){
     assert_eq!(filter_expr(&b"(product=eq.134)|(price=lt.100.0)"[..]), IResult::Done(&b""[..], 
         Filter{
@@ -547,7 +547,7 @@ fn test_paren_filter_exprs(){
                 equality: Equality::EQ,
                 right: Operand::Number(134f64)
             },
-            connector: Some(Connector::OR),
+            connector: None,
             sub_filters: vec![
                 Filter{
                     condition: Condition{
@@ -555,7 +555,7 @@ fn test_paren_filter_exprs(){
                         equality: Equality::LT,
                         right: Operand::Number(100.0)
                     },
-                    connector: None,
+                    connector: Some(Connector::OR),
                     sub_filters: vec![]
                 }
             ]
@@ -569,7 +569,7 @@ fn test_paren_filter_exprs(){
                     equality: Equality::LT,
                     right: Operand::Number(20f64)
                 },
-            connector: Some(Connector::AND),
+            connector: None,
             sub_filters:vec![
                 Filter{
                     condition:Condition{
