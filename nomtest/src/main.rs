@@ -217,6 +217,16 @@ named!(boolean <bool>,
         )
 );
 
+named!(number<i64>,
+    map_res!(
+      map_res!(
+        ws!(digit),
+        str::from_utf8
+      ),
+      FromStr::from_str
+    )
+);
+
 named!(operand <Operand>,
    alt_complete!(
         float => {|f| Operand::Number(f as f64)} |
